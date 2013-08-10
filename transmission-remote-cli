@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 ########################################################################
 # This is transmission-remote-cli, whereas 'cli' stands for 'Curses    #
 # Luminous Interface', a client for the daemon of the BitTorrent       #
@@ -16,10 +16,10 @@
 # http://www.gnu.org/licenses/gpl-3.0.txt                              #
 ########################################################################
 
-VERSION = '1.6.2'
+VERSION = '1.6.1'
 
 TRNSM_VERSION_MIN = '1.90'
-TRNSM_VERSION_MAX = '2.82'
+TRNSM_VERSION_MAX = '2.81'
 RPC_VERSION_MIN = 8
 RPC_VERSION_MAX = 15
 
@@ -117,6 +117,7 @@ config.add_section('Filtering')
 config.set('Filtering', 'filter', '')
 config.set('Filtering', 'invert', 'False')
 config.add_section('Misc')
+config.set('Misc', 'minimalist_mode', 'False')
 config.set('Misc', 'compact_list', 'False')
 config.set('Misc', 'blank_lines', 'True')
 config.set('Misc', 'torrentname_is_progressbar', 'True')
@@ -839,6 +840,7 @@ class Interface:
         self.filter_list    = config.get('Filtering', 'filter')
         self.filter_inverse = config.getboolean('Filtering', 'invert')
         self.sort_orders    = parse_sort_str(config.get('Sorting', 'order'))
+        self.minimalist_mode = config.getboolean('Misc', 'minimalist_mode')
         self.compact_list   = config.getboolean('Misc', 'compact_list')
         self.blank_lines    = config.getboolean('Misc', 'blank_lines')
         self.torrentname_is_progressbar = config.getboolean('Misc', 'torrentname_is_progressbar')
@@ -1743,7 +1745,77 @@ class Interface:
         self.screen.refresh()
 
 
+    def draw_torrentlist_item_minimal(self, torrent, focused, compact, y):
+        name = self.enc(torrent['name'])
+
+        if torrent['status'] == Transmission.STATUS_CHECK:
+            percentDone = float(torrent['recheckProgress']) * 100
+        else:
+            percentDone = torrent['percentDone'] 
+        if percentDone >= 100:
+            percentDone = '{0:.0f}%'.format(percentDone)
+        else:
+            percentDone = '{0:2.1f}%'.format(percentDone)
+
+        pconn = (num2str(torrent['peersConnected']),'')[torrent['peersConnected']==0]
+
+        peers = num2str(torrent['seeders']) + '/'
+        peers += num2str(torrent['leechers'])
+
+        down_rate = ('',scale_bytes(torrent['rateDownload']))[torrent['rateDownload']>0]
+        up_rate = ('',scale_bytes(torrent['rateUpload']))[torrent['rateUpload']>0]
+
+        ratio = num2str(torrent['uploadRatio'], '%.02f')
+
+        size = scale_bytes(torrent['sizeWhenDone'])
+
+        if torrent['isIsolated']:
+            status = 'T'
+        elif torrent['status'] == Transmission.STATUS_SEED or \
+           torrent['status'] == Transmission.STATUS_SEED_WAIT:
+            status = 'S'
+        elif torrent['status'] == Transmission.STATUS_STOPPED:
+            status = 'P'
+        elif torrent['status'] == Transmission.STATUS_CHECK or \
+             torrent['status'] == Transmission.STATUS_CHECK_WAIT:
+            status = 'V'
+        elif torrent['rateDownload'] == 0:
+            status = 'I'
+        elif torrent['percentDone'] < 100:
+            status = 'D'
+        else:
+            status = '?'
+
+        pconn = pconn.rjust(3)
+        peers = peers.rjust(7)
+        down_rate = down_rate.rjust(6)
+        up_rate = up_rate.rjust(6)
+        ratio = ratio.rjust(5)
+        size = size.rjust(6)
+        percentDone = percentDone.rjust(5)
+
+        lline = name
+        rline = ' | ' + pconn + ' ' + peers + ' ' + down_rate + ' ' + up_rate + ' ' + \
+                ratio + ' ' + size + ' ' + percentDone + ' ' + status
+        line = lline + rline
+
+        if len(line) < self.width:
+            line = lline.ljust(self.width - len(rline)) + rline
+        elif len(rline) < self.width:
+            line = lline[:self.width - len(line)] + rline
+        else:
+            line = line[-self.width:]
+
+        if focused:
+            self.pad.addstr(y, 0, line, curses.A_REVERSE + curses.A_UNDERLINE)
+        else:
+            self.pad.addstr(y, 0, line, 0)
+        return 1
+        
     def draw_torrentlist_item(self, torrent, focused, compact, y):
+        if self.minimalist_mode:
+            return self.draw_torrentlist_item_minimal(torrent, focused, compact, y)
+
         # the torrent name is also a progress bar
         self.draw_torrentlist_title(torrent, focused, self.torrent_title_width, y)
 
@@ -2575,9 +2647,15 @@ class Interface:
 
 
     def draw_title_bar(self):
-        self.screen.insstr(0, 0, ' '.center(self.width), curses.A_REVERSE)
-        self.draw_connection_status()
-        self.draw_quick_help()
+        if self.minimalist_mode:
+            self.screen.insstr(0, 0, ' '.center(self.width), curses.A_REVERSE + curses.A_UNDERLINE)
+            status = "Transmission @ %s:%s" % (server.host, server.port)
+            self.screen.addstr(0, 0, self.enc(status), curses.A_REVERSE + curses.A_UNDERLINE)
+        else:
+            self.screen.insstr(0, 0, ' '.center(self.width), curses.A_REVERSE)
+            self.draw_connection_status()
+            self.draw_quick_help()
+
     def draw_connection_status(self):
         status = "Transmission @ %s:%s" % (server.host, server.port)
         if cmd_args.DEBUG:
