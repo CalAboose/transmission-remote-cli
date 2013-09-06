@@ -1050,7 +1050,7 @@ class Interface:
 
     def recalculate_torrents_per_page(self):
         self.lines_per_entry   = 3 if self.blank_lines else 2
-        self.tlist_item_height = self.lines_per_entry if not self.compact_list else 1
+        self.tlist_item_height = self.lines_per_entry if not (self.compact_list or self.minimalist_mode) else 1
         self.mainview_height = self.height - 2
         self.torrents_per_page = self.mainview_height / self.tlist_item_height
 
