@@ -1791,7 +1791,7 @@ class Interface:
             status = '?'
 
         pconn = pconn.rjust(3)
-        peers = peers.rjust(7)
+        peers = peers.rjust(9)
         down_rate = down_rate.rjust(6)
         up_rate = up_rate.rjust(6)
         ratio = ratio.rjust(5)
