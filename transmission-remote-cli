@@ -16,7 +16,7 @@
 # http://www.gnu.org/licenses/gpl-3.0.txt                              #
 ########################################################################
 
-VERSION = '1.6.2'
+VERSION = '1.6.3'
 
 TRNSM_VERSION_MIN = '1.90'
 TRNSM_VERSION_MAX = '2.82'
@@ -295,7 +295,7 @@ class Transmission:
 
     DETAIL_FIELDS = [ 'files', 'priorities', 'wanted', 'peers', 'trackers',
                       'activityDate', 'dateCreated', 'startDate', 'doneDate',
-                      'totalSize', 'leftUntilDone', 'comment',
+                      'totalSize', 'leftUntilDone', 'comment', 'creator',
                       'hashString', 'pieceCount', 'pieceSize', 'pieces',
                       'downloadedEver', 'corruptEver', 'peersFrom' ] + LIST_FIELDS
 
@@ -318,6 +318,7 @@ class Transmission:
         response = request.get_response()
 
         self.rpc_version = response['arguments']['rpc-version']
+        self.version = response['arguments']['version'].split()[0]
 
         # rpc version too old?
         version_error = "Unsupported Transmission version: " + str(response['arguments']['version']) + \
@@ -348,7 +349,7 @@ class Transmission:
         if self.rpc_version >= 14:
             self.LIST_FIELDS.append('queuePosition');
             self.DETAIL_FIELDS.append('queuePosition');
- 
+
         # set up request list
         self.requests = {'torrent-list':
                              TransmissionRequest(host, port, path, 'torrent-get', self.TAG_TORRENT_LIST, {'fields': self.LIST_FIELDS}),
@@ -654,13 +655,18 @@ class Transmission:
         else:
             return ''
 
-    def stop_torrent(self, id):
-        request = TransmissionRequest(self.host, self.port, self.path, 'torrent-stop', 1, {'ids': [id]})
+    def stop_torrents(self, ids):
+        request = TransmissionRequest(self.host, self.port, self.path, 'torrent-stop', 1, {'ids': ids})
         request.send_request()
         self.wait_for_torrentlist_update()
 
-    def start_torrent(self, id):
-        request = TransmissionRequest(self.host, self.port, self.path, 'torrent-start', 1, {'ids': [id]})
+    def start_torrents(self, ids):
+        request = TransmissionRequest(self.host, self.port, self.path, 'torrent-start', 1, {'ids': ids})
+        request.send_request()
+        self.wait_for_torrentlist_update()
+
+    def start_now_torrent(self, id):
+        request = TransmissionRequest(self.host, self.port, self.path, 'torrent-start-now', 1, {'ids': [id]})
         request.send_request()
         self.wait_for_torrentlist_update()
 
@@ -851,7 +857,6 @@ class Interface:
         self.stats            = server.get_global_stats()
         self.torrent_details  = []
         self.selected_torrent = -1  # changes to >-1 when focus >-1 & user hits return
-        self.all_paused       = False
         self.highlight_dialog = False
         self.search_focus = 0   # like self.focus but for searches in torrent list
         self.focused_id   = -1  # the id (provided by Transmission) of self.torrents[self.focus]
@@ -894,6 +899,7 @@ class Interface:
             ord('K'):               self.K_key,
             ord('p'):               self.pause_unpause_torrent,
             ord('P'):               self.pause_unpause_all_torrent,
+            ord('N'):               self.start_now_torrent,
             ord('v'):               self.verify_torrent,
             ord('y'):               self.verify_torrent,
             ord('r'):               self.r_key,
@@ -1204,7 +1210,7 @@ class Interface:
             self.file_pritority_or_switch_details(c)
 
     def add_torrent(self):
-        location = self.dialog_input_text("Add torrent from file or URL", homedir2tilde(os.getcwd()+os.sep), tab_complete='all')
+        location = self.dialog_input_text("Add torrent from file or URL", homedir2tilde(os.getcwd()+os.sep), tab_complete='files')
         if location:
             error = server.add_torrent(tilde2homedir(location))
             if error:
@@ -1327,19 +1333,24 @@ class Interface:
             else:
                 t = self.torrents[self.focus]
             if t['status'] == Transmission.STATUS_STOPPED:
-                server.start_torrent(t['id'])
+                server.start_torrents([t['id']])
             else:
-                server.stop_torrent(t['id'])
+                server.stop_torrents([t['id']])
+
+    def start_now_torrent(self, c):
+        if self.focus > -1:
+            if self.selected_torrent > -1:
+                t = self.torrent_details
+            else:
+                t = self.torrents[self.focus]
+            server.start_now_torrent(t['id'])
 
     def pause_unpause_all_torrent(self, c):
-        if self.all_paused:
-            for t in self.torrents:
-                server.start_torrent(t['id'])
-            self.all_paused = False
+        focused_torrent = self.torrents[ max(0,self.focus) ]
+        if focused_torrent['status'] == Transmission.STATUS_STOPPED:
+            server.start_torrents([t['id'] for t in self.torrents])
         else:
-            for t in self.torrents:
-                server.stop_torrent(t['id'])
-            self.all_paused = True
+            server.stop_torrents([t['id'] for t in self.torrents])
 
     def verify_torrent(self, c):
         if self.focus > -1:
@@ -2126,6 +2137,9 @@ class Interface:
 
         info.append(['Location: ',"%s" % homedir2tilde(t['downloadDir'])])
 
+        if t['creator']:
+            info.append(['Creator: ',"%s" % t['creator']])
+
         ypos = self.draw_details_list(ypos, info)
 
         self.draw_details_eventdates(ypos+1)
@@ -2667,7 +2681,7 @@ class Interface:
             self.draw_quick_help()
 
     def draw_connection_status(self):
-        status = "Transmission @ %s:%s" % (server.host, server.port)
+        status = "Transmission %s @ %s:%s" % (server.version, server.host, server.port)
         if cmd_args.DEBUG:
             status = "%d x %d " % (self.width, self.height) + status
         self.screen.addstr(0, 0, self.enc(status), curses.A_REVERSE)
@@ -2706,6 +2720,7 @@ class Interface:
                   "            +/-  Adjust bandwidth priority for focused torrent\n" + \
                   "              p  Pause/Unpause torrent\n" + \
                   "              P  Pause/Unpause all torrents\n" + \
+                  "              N  Start torrent now\n" + \
                   "            v/y  Verify torrent\n" + \
                   "              m  Move torrent\n" + \
                   "              n  Reannounce torrent\n" + \
@@ -2863,8 +2878,9 @@ class Interface:
 
 
     # tab_complete values:
-    #               'all': complete with any files/directories
+    #             'files': complete with any files/directories
     #              'dirs': complete only with directories
+    #      'torrent_list': complete with names from the torrent list
     #     any false value: do not complete
     def dialog_input_text(self, message, input='', on_change=None, on_enter=None, tab_complete=None):
         width  = self.width - 4
@@ -2926,29 +2942,37 @@ class Interface:
                 index += 1
                 if on_change: on_change(input)
             elif c == ord('\t') and tab_complete:
-                (dirname, filename) = os.path.split(tilde2homedir(input))
-                if not dirname:
-                    dirname = unicode(os.getcwd())
-                try:
-                    possible_choices = [ choice for choice in os.listdir(dirname)
-                                         if choice.startswith(filename) ]
-                except OSError:
-                    continue;
-                if tab_complete == 'dirs':
-                    possible_choices = [ d for d in possible_choices
-                                         if os.path.isdir(os.path.join(dirname, d)) ]
+                possible_choices = [];
+                if tab_complete in ('files', 'dirs'):
+                    (dirname, filename) = os.path.split(tilde2homedir(input))
+                    if not dirname:
+                        dirname = unicode(os.getcwd())
+                    try:
+                        possible_choices = [ os.path.join(dirname, choice) for choice in os.listdir(dirname)
+                                             if choice.startswith(filename) ]
+                    except OSError:
+                        continue;
+                    if tab_complete == 'dirs':
+                        possible_choices = [ d for d in possible_choices
+                                             if os.path.isdir(d) ]
+                elif tab_complete == 'torrent_list':
+                    possible_choices = [ t['name'] for t in self.torrents
+                                         if t['name'].startswith(input) ]
                 if(possible_choices):
-                    input = os.path.join(dirname, os.path.commonprefix(possible_choices))
-                    if len(possible_choices) == 1 and os.path.isdir(input) and input.endswith(os.sep) == False:
-                        input += os.sep
-                    input = homedir2tilde(input)
+                    input = os.path.commonprefix(possible_choices)
+                    if tab_complete in ('files', 'dirs'):
+                        if len(possible_choices) == 1 and os.path.isdir(input) and input.endswith(os.sep) == False:
+                            input += os.sep
+                        input = homedir2tilde(input)
                     index = len(input)
+                    if on_change: on_change(input);
             if on_change: win.redrawwin()
 
     def dialog_search_torrentlist(self, c):
         self.dialog_input_text('Search torrent by title:',
                                on_change=self.draw_torrent_list,
-                               on_enter=self.increment_search)
+                               on_enter=self.increment_search,
+                               tab_complete = 'torrent_list')
 
     def increment_search(self, input):
         self.search_focus += 1
